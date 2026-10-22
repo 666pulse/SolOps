@@ -41,13 +41,13 @@ class DiskTests(unittest.TestCase):
         ]:
             (self.commands / command).symlink_to(shim)
         # 仅替换系统路径/权限入口，测试生产脚本的检查、排序与重复执行逻辑。
-        script = (ROOT / "files/format_and_mount.sh").read_text()
+        script = (ROOT / "files/setup_disks.sh").read_text()
         script = script.replace("/etc/fstab", str(self.fstab))
         script = script.replace("/run/lock/solana-disks.lock", str(self.root / "lock"))
         script = script.replace("[[ $EUID -eq 0 ]]", "true")
         for name in ["ledger", "accounts"]:
             script = script.replace(f"/mnt/{name}", str(self.root / f"mnt-{name}"))
-        self.script = self.root / "format_and_mount.sh"
+        self.script = self.root / "setup_disks.sh"
         self.script.write_text(script)
 
     def run_script(self, allow=False):

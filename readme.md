@@ -350,7 +350,7 @@ ansible-playbook site.yml --syntax-check
 ansible-playbook site.yml --list-tasks
 ruff format --check files tests action_plugins library
 ruff check files tests action_plugins library
-bash -n files/format_and_mount.sh
+bash -n files/setup_disks.sh
 promtool test rules tests/solana-alerts.yml tests/solana-slot-rules.yml
 ```
 

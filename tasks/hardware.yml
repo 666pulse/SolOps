@@ -43,11 +43,11 @@
     mode: '0755'
 - name: 安装磁盘脚本
   ansible.builtin.copy:
-    src: files/format_and_mount.sh
-    dest: "{{ solana_tools }}/format_and_mount.sh"
+    src: files/setup_disks.sh
+    dest: "{{ solana_tools }}/setup_disks.sh"
     mode: '0755'
 - name: 检查并挂载两块数据盘
   ansible.builtin.command:
-    argv: "{{ [solana_tools + '/format_and_mount.sh', '--ledger_disk', ledger_disk, '--accounts_disk', accounts_disk, '--owner', solana_user] + (['--allow-format'] if allow_format | bool else []) }}"
+    argv: "{{ [solana_tools + '/setup_disks.sh', '--ledger_disk', ledger_disk, '--accounts_disk', accounts_disk, '--owner', solana_user] + (['--allow-format'] if allow_format | bool else []) }}"
   register: disk_setup
   changed_when: "'CHANGED:' in disk_setup.stdout"
