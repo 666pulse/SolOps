@@ -1,0 +1,24 @@
+global:
+  scrape_interval: {{ monitoring_scrape_interval }}
+  evaluation_interval: {{ monitoring_scrape_interval }}
+  external_labels:
+    rpc_node: {{ inventory_hostname | to_json }}
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['127.0.0.1:{{ prometheus_port }}']
+  - job_name: node
+    static_configs:
+      - targets: ['127.0.0.1:{{ node_exporter_port }}']
+  - job_name: caddy
+    static_configs:
+      - targets: ['127.0.0.1:{{ caddy_admin_port }}']
+  - job_name: solana
+    # light-mode 的健康、版本、identity 为串行 RPC 请求，另留 1 秒余量。
+    scrape_timeout: {{ solana_exporter_http_timeout | int * 3 + 1 }}s
+    static_configs:
+      - targets: ['127.0.0.1:{{ solana_exporter_port }}']

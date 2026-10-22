@@ -1,0 +1,19 @@
+[server]
+http_addr = 0.0.0.0
+http_port = {{ grafana_port }}
+domain = {{ grafana_domain or 'localhost' }}
+root_url = {{ 'https://' ~ grafana_domain ~ '/' if grafana_domain else 'http://localhost:' ~ grafana_port ~ '/' }}
+
+[security]
+admin_user = admin
+admin_password = $__file{/etc/grafana/admin_password}
+cookie_secure = {{ 'true' if grafana_domain else 'false' }}
+
+[users]
+allow_sign_up = false
+
+[auth.anonymous]
+enabled = false
+
+[paths]
+provisioning = /etc/grafana/provisioning

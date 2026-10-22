@@ -1,0 +1,26 @@
+[Unit]
+Description=Prometheus Solana Exporter
+After=network.target
+
+[Service]
+User=solana_exporter
+Group=solana_exporter
+ExecStart={{ solana_exporter_release }}/solana-exporter -listen-address=127.0.0.1:{{ solana_exporter_port }} -rpc-url=http://127.0.0.1:{{ rpc_port }} -light-mode -slot-pace={{ solana_exporter_slot_pace | int }} -http-timeout={{ solana_exporter_http_timeout | int }}
+Environment=GOMAXPROCS=2
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictSUIDSGID=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

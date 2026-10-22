@@ -1,0 +1,49 @@
+---
+- name: 创建 Node Exporter 系统用户
+  ansible.builtin.user:
+    name: node_exporter
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+- name: 创建监控下载缓存及安装目录
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /var/cache/solana
+    - /opt/node_exporter
+    - /var/lib/node_exporter/textfile_collector
+- name: 下载并校验 Node Exporter 官方发布包
+  ansible.builtin.get_url:
+    url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+    dest: "/var/cache/solana/node_exporter-{{ node_exporter_version }}.tar.gz"
+    checksum: "sha256:{{ node_exporter_sha256 }}"
+    mode: '0644'
+- name: 解压 Node Exporter
+  ansible.builtin.unarchive:
+    src: "/var/cache/solana/node_exporter-{{ node_exporter_version }}.tar.gz"
+    dest: /opt/node_exporter
+    remote_src: true
+    creates: "/opt/node_exporter/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter"
+- name: 安装 Node Exporter 服务
+  ansible.builtin.template:
+    src: templates/node-exporter.service.j2
+    dest: /etc/systemd/system/node-exporter.service
+    mode: '0644'
+  register: node_exporter_unit
+- name: 启动 Node Exporter
+  ansible.builtin.systemd_service:
+    name: node-exporter
+    enabled: true
+    daemon_reload: true
+    state: "{{ 'restarted' if node_exporter_unit is changed else 'started' }}"
+- name: 检查 Node Exporter 指标
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ node_exporter_port }}/metrics"
+    return_content: true
+  register: node_exporter_ready
+  until: node_exporter_ready.status | default(0) == 200 and 'node_cpu_seconds_total' in node_exporter_ready.content | default('')
+  retries: 10
+  delay: 2
+  when: not ansible_check_mode

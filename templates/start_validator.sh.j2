@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+bin={{ (agave_release + '/bin/agave-validator') | quote }}
+consensus=(
+    --identity {{ solana_identity | quote }}
+    --no-voting
+    --expected-genesis-hash {{ expected_genesis_hash | quote }}
+)
+gossip=(
+    --gossip-port {{ gossip_port | string | quote }}
+    --dynamic-port-range {{ dynamic_port_range | quote }}
+{% for entrypoint in entrypoints %}
+    --entrypoint {{ entrypoint | quote }}
+{% endfor %}
+{% for validator in known_validators %}
+    --known-validator {{ validator | quote }}
+{% endfor %}
+    --only-known-rpc
+)
+rpc=(
+    --rpc-port {{ rpc_port | string | quote }}
+    --rpc-bind-address {{ rpc_bind_address | quote }}
+    --full-rpc-api
+    --private-rpc
+    --rpc-threads {{ rpc_threads | string | quote }}
+    --unified-scheduler-handler-threads {{ unified_scheduler_handler_threads | string | quote }}
+{% if rpc_transaction_history | bool %}
+    --enable-rpc-transaction-history
+{% endif %}
+)
+ledger=(
+    --ledger {{ ledger_path | quote }}
+    --accounts {{ accounts_path | quote }}
+    --limit-blockstore-size {{ blockstore_limit_shreds | string | quote }}
+    --accounts-db-write-cache-limit {{ accounts_db_write_cache_limit_bytes | string | quote }}
+    --accounts-index-limit {{ accounts_index_limit | quote }}
+{% for index in account_indexes %}
+    --account-index {{ index | quote }}
+{% endfor %}
+{% for key in account_index_include_keys %}
+    --account-index-include-key {{ key | quote }}
+{% endfor %}
+)
+snapshots=(
+    --snapshots {{ snapshot_path | quote }}
+    --minimal-snapshot-download-speed {{ agave_snapshot_min_speed | string | quote }}
+    --maximum-full-snapshots-to-retain 1
+    --maximum-incremental-snapshots-to-retain 2
+)
+extra=(
+{% for argument in validator_extra_args %}
+    {{ argument | string | quote }}
+{% endfor %}
+)
+args=("${consensus[@]}" "${gossip[@]}" "${rpc[@]}" "${ledger[@]}" "${snapshots[@]}" --log /var/log/solana/validator.log "${extra[@]}")
+# --help 让 Agave 解析全部参数但不启动节点，部署时据此检查版本兼容性。
+if [[ ${1:-} == --check ]]; then
+    exec "$bin" "${args[@]}" --help
+fi
+exec "$bin" "${args[@]}"

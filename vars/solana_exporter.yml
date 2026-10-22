@@ -1,0 +1,20 @@
+---
+# site.yml 仅将缺失的参数补为默认值，保留 inventory / extra vars 覆盖。
+# asymmetric-research/solana-exporter v3.1.0；更新提交时同步更新源码校验和。
+solana_exporter_defaults:
+  solana_exporter_revision: 4b7d4ab6e0358a63e20d7c1fff37642d2501ba7d
+  solana_exporter_source_sha256: f6dbb797423cf49bd75a03b973d447fa0fafa9e8d7c4831c7f4cc94ea6522139
+  solana_exporter_go_version: "1.26.8"
+  solana_exporter_go_sha256: d0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b
+  solana_exporter_port: 9200
+  solana_exporter_slot_pace: 15
+  solana_exporter_http_timeout: 2
+  solana_exporter_build_jobs: 2
+  solana_exporter_build_timeout: 900
+  solana_slot_commitment: finalized
+  solana_slot_timeout: 3
+  solana_slot_reference_rpcs:
+    - name: solana-tracker
+      url: https://rpc.solanatracker.io/public
+    - name: publicnode
+      url: https://solana-rpc.publicnode.com

@@ -1,0 +1,53 @@
+---
+- name: 安装基础和编译依赖
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - pkg-config
+      - libssl-dev
+      - libudev-dev
+      - libclang-dev
+      - clang
+      - cmake
+      - protobuf-compiler
+      - git
+      - curl
+      - jq
+      - ca-certificates
+      - python3
+      - acl
+      - e2fsprogs
+      - util-linux
+      - zstd
+      - bzip2
+      - cpufrequtils
+      - logrotate
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: 创建运行组
+  ansible.builtin.group:
+    name: "{{ solana_user }}"
+- name: 创建运行用户
+  ansible.builtin.user:
+    name: "{{ solana_user }}"
+    group: "{{ solana_user }}"
+    home: "{{ solana_home }}"
+    shell: /bin/bash
+    create_home: true
+- name: 创建辅助工具目录
+  ansible.builtin.file:
+    path: "{{ solana_tools }}"
+    state: directory
+    mode: '0755'
+- name: 安装磁盘脚本
+  ansible.builtin.copy:
+    src: files/format_and_mount.sh
+    dest: "{{ solana_tools }}/format_and_mount.sh"
+    mode: '0755'
+- name: 检查并挂载两块数据盘
+  ansible.builtin.command:
+    argv: "{{ [solana_tools + '/format_and_mount.sh', '--ledger_disk', ledger_disk, '--accounts_disk', accounts_disk, '--owner', solana_user] + (['--allow-format'] if allow_format | bool else []) }}"
+  register: disk_setup
+  changed_when: "'CHANGED:' in disk_setup.stdout"

@@ -1,0 +1,30 @@
+[Unit]
+Description=Solana Mainnet RPC (Agave {{ agave_version }})
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor={{ ledger_path }} {{ accounts_path }}
+ConditionPathIsMountPoint={{ ledger_path }}
+ConditionPathIsMountPoint={{ accounts_path }}
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User={{ solana_user }}
+Group={{ solana_user }}
+# Agave 4.3 默认启用 XDP 发送，普通用户启动需要这两个网络能力
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+WorkingDirectory={{ solana_home }}
+Environment=RUST_LOG=info
+ExecStart={{ solana_home }}/start_validator.sh
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=300
+LimitNOFILE=1000000
+LimitMEMLOCK=infinity
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

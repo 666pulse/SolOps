@@ -1,0 +1,79 @@
+---
+- name: 清理本项目旧的 Caddy Cloudsmith 软件源
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/caddy-stable.list
+    - /etc/apt/keyrings/caddy.asc
+- name: 安装 Caddy 软件包依赖
+  ansible.builtin.apt:
+    name: [ca-certificates, xz-utils]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+- name: 创建 Caddy 软件包缓存目录
+  ansible.builtin.file:
+    path: /var/cache/solana/caddy
+    state: directory
+    mode: '0755'
+- name: 下载并校验 Caddy 官方固定版本软件包
+  ansible.builtin.get_url:
+    url: "https://github.com/caddyserver/caddy/releases/download/v{{ caddy_release.version }}/caddy_{{ caddy_release.version }}_linux_amd64.deb"
+    dest: "/var/cache/solana/caddy/caddy_{{ caddy_release.version }}_linux_amd64.deb"
+    checksum: "sha256:{{ caddy_release.sha256 }}"
+    mode: '0644'
+    timeout: 60
+- name: 安装标准 Caddy 软件包
+  ansible.builtin.apt:
+    deb: "/var/cache/solana/caddy/caddy_{{ caddy_release.version }}_linux_amd64.deb"
+    state: present
+    policy_rc_d: 101
+  register: caddy_package
+- name: 校验并安装 Caddy 配置
+  ansible.builtin.template:
+    src: templates/caddyfile.j2
+    dest: /etc/caddy/caddyfile
+    owner: root
+    group: caddy
+    mode: '0640'
+    validate: /usr/bin/caddy validate --config %s --adapter caddyfile
+  register: caddy_config
+  no_log: true
+  diff: false
+- name: 创建 Caddy systemd 覆盖目录
+  ansible.builtin.file:
+    path: /etc/systemd/system/caddy.service.d
+    state: directory
+    mode: '0755'
+- name: 指定小写配置文件路径
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/caddy.service.d/solana.conf
+    mode: '0644'
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/bin/caddy run --config /etc/caddy/caddyfile --adapter caddyfile
+      ExecReload=
+      ExecReload=/usr/bin/caddy reload --config /etc/caddy/caddyfile --adapter caddyfile --address 127.0.0.1:{{ caddy_admin_port }}
+  register: caddy_unit
+- name: 启动 Caddy
+  ansible.builtin.systemd_service:
+    name: caddy
+    enabled: true
+    daemon_reload: true
+    state: "{{ 'restarted' if caddy_unit is changed or caddy_package is changed else 'started' }}"
+- name: 加载已校验的 Caddy 配置
+  ansible.builtin.systemd_service:
+    name: caddy
+    state: reloaded
+  # Caddy 对相同配置不重复加载；也能恢复上次写配置后、reload 前中断的部署。
+  when: not ansible_check_mode
+- name: 检查 Caddy 本机指标端点
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ caddy_admin_port }}/metrics"
+  register: caddy_ready
+  until: caddy_ready.status | default(0) == 200
+  retries: 10
+  delay: 2
+  when: not ansible_check_mode

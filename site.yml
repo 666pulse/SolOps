@@ -1,0 +1,142 @@
+---
+- name: 部署 Mainnet Agave RPC
+  hosts: mainnet_rpcs
+  become: true
+  gather_facts: true
+  serial: 1
+  vars_files:
+    - vars/solana_exporter.yml
+    - vars/caddy.yml
+  vars:
+    solana_home: "/home/{{ solana_user }}"
+    solana_identity: "{{ solana_home }}/identity.json"
+    solana_tools: "{{ solana_home }}/tools"
+    agave_root: "{{ solana_home }}/agave"
+    agave_release: "{{ agave_root }}/releases/{{ agave_version }}"
+    agave_source: "{{ agave_root }}/src/{{ agave_version }}"
+    snapshot_finder_dir: "{{ solana_tools }}/snapshot-finder"
+    ledger_path: /mnt/ledger
+    accounts_path: /mnt/accounts
+    snapshot_path: /mnt/ledger/snapshots
+    solana_exporter_release: "/opt/solana-exporter/releases/{{ solana_exporter_revision }}-go{{ solana_exporter_go_version }}"
+  pre_tasks:
+    - name: 补齐 Solana Exporter 默认参数
+      ansible.builtin.set_fact:
+        "{{ item.key }}": "{{ lookup('ansible.builtin.vars', item.key, default=item.value) }}"
+      loop: "{{ solana_exporter_defaults | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      no_log: "{{ item.key == 'solana_slot_reference_rpcs' }}"
+      tags: always
+    - name: 检查系统及必填参数
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == 'Ubuntu'
+          - ansible_facts.distribution_version is version('22.04', '>=')
+          - ansible_facts.architecture == 'x86_64'
+          - agave_version is match('^[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$')
+          - solana_user is match('^[a-z_][a-z0-9_-]*$')
+          - solana_user != 'root'
+          - agave_build_jobs | int > 0
+          - rpc_port | int > 1024 and rpc_port | int < 65535
+          - dynamic_port_range is match('^[0-9]+-[0-9]+$')
+          - dynamic_port_range.split('-')[1] | int - dynamic_port_range.split('-')[0] | int >= 26
+          - dynamic_port_range.split('-')[0] | int >= 1024
+          - dynamic_port_range.split('-')[1] | int <= 65535
+          - snapshot_finder_version is match('^[0-9a-f]{40}$')
+          - snapshot_threads | int > 0
+          - snapshot_min_download_speed_mb | int > 0
+          - snapshot_max_local_age | int > 0
+          - snapshot_search_timeout | int > 0
+          - snapshot_timeout | int > snapshot_search_timeout | int
+          - known_validators | length > 0
+          - entrypoints | length > 0
+          - cpu_governor in ['performance', 'powersave', 'ondemand', 'schedutil']
+        fail_msg: 请填写 inventory 中的运行参数；目标需为 Ubuntu 22.04+ x86_64。
+      tags: always
+    - name: 检查磁盘设备参数
+      ansible.builtin.assert:
+        that:
+          - ledger_disk is match('^/dev/')
+          - accounts_disk is match('^/dev/')
+          - ledger_disk != accounts_disk
+          - "'replace-' not in ledger_disk and 'replace-' not in accounts_disk"
+        fail_msg: 磁盘准备必须填写两个不同的实际 /dev/ 整盘设备，不能填写挂载目录。
+      when:
+        - "'hardware' not in ansible_skip_tags"
+        - "'all' in ansible_run_tags or 'hardware' in ansible_run_tags"
+      tags: always
+    - name: 检查同机网关配置
+      ansible.builtin.assert:
+        that:
+          - rpc_bind_address == '127.0.0.1'
+          - gateway_domain == '' or gateway_domain is match('^[a-z0-9][a-z0-9.-]+[a-z0-9]$')
+          - grafana_domain == '' or grafana_domain is match('^[a-z0-9][a-z0-9.-]+[a-z0-9]$')
+          - gateway_domain == '' or grafana_domain == '' or gateway_domain != grafana_domain
+          - "not gateway_domain.endswith('.example.com')"
+          - "not grafana_domain.endswith('.example.com')"
+          - gateway_allowed_cidrs is sequence and gateway_allowed_cidrs is not string
+        fail_msg: 同机网关要求 RPC 绑定 127.0.0.1；域名可以留空，填写时必须是真实域名。CIDR 白名单应为列表。
+      when:
+        - "'gateway' not in ansible_skip_tags"
+        - "'all' in ansible_run_tags or 'gateway' in ansible_run_tags"
+      tags: always
+    - name: 检查网关 API key（必填，仅允许字母、数字、下划线和连字符）
+      ansible.builtin.assert:
+        that:
+          - gateway_api_key | default('') is string
+          - gateway_api_key | default('') is match('^[A-Za-z0-9_-]{1,256}\Z')
+        fail_msg: 请在本地 inventory 或 Ansible Vault 中设置 gateway_api_key。
+      no_log: true
+      when:
+        - "'gateway' not in ansible_skip_tags"
+        - "'all' in ansible_run_tags or 'gateway' in ansible_run_tags"
+      tags: always
+    - name: 检查本机服务端口
+      ansible.builtin.assert:
+        that:
+          - item | int > 1024 and item | int < 65535
+          - item | int < dynamic_port_range.split('-')[0] | int or item | int > dynamic_port_range.split('-')[1] | int
+          - item | int != gossip_port | int
+          - "([rpc_port | int, rpc_port | int + 1, gateway_rpc_port | int, gateway_ws_port | int, caddy_admin_port | int, node_exporter_port | int, solana_exporter_port | int, prometheus_port | int, grafana_port | int] | unique | length) == 9"
+        fail_msg: Agave RPC/WebSocket、Caddy 入口/管理、监控端口必须互不冲突，且不能占用 gossip/dynamic port range。
+      loop: "{{ [rpc_port, rpc_port | int + 1, gateway_rpc_port, gateway_ws_port, caddy_admin_port, node_exporter_port, solana_exporter_port, prometheus_port, grafana_port] }}"
+      tags: always
+  tasks:
+    - name: 硬件与磁盘
+      ansible.builtin.import_tasks: tasks/hardware.yml
+      tags: hardware
+    - name: 系统优化
+      ansible.builtin.import_tasks: tasks/tuning.yml
+      tags: tuning
+    - name: 编译 Agave
+      ansible.builtin.import_tasks: tasks/build.yml
+      tags: build
+    - name: 生成 identity 私钥
+      ansible.builtin.import_tasks: tasks/identity.yml
+      tags: identity
+    - name: 下载 snapshot
+      ansible.builtin.import_tasks: tasks/snapshot.yml
+      tags: snapshot
+    - name: 安装 Node Exporter
+      ansible.builtin.import_tasks: tasks/node_exporter.yml
+      tags: [monitoring, node_exporter]
+    - name: 安装 Solana slot 对比采集器
+      ansible.builtin.import_tasks: tasks/solana_slot_compare.yml
+      tags: [monitoring, solana_slot_compare]
+    - name: 安装 Solana Exporter
+      ansible.builtin.import_tasks: tasks/solana_exporter.yml
+      tags: [monitoring, solana_exporter]
+    - name: 安装 Prometheus
+      ansible.builtin.import_tasks: tasks/prometheus.yml
+      tags: [monitoring, prometheus]
+    - name: 安装 Grafana
+      ansible.builtin.import_tasks: tasks/grafana.yml
+      tags: [monitoring, grafana]
+    - name: 运行 RPC
+      ansible.builtin.import_tasks: tasks/service.yml
+      tags: service
+    # 先把旧 RPC 迁移到内部端口，释放 8899/8900 后再让 Caddy 接管。
+    - name: 配置 RPC 网关
+      ansible.builtin.import_tasks: tasks/gateway.yml
+      tags: gateway

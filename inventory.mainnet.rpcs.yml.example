@@ -1,0 +1,126 @@
+---
+# 示例配置，不包含真实主机、SSH 私钥或 validator 私钥。
+# 改为实际主机；也可以复制为 inventory.mainnet.rpcs.local.yml 并用 -i 指定。
+mainnet_rpcs:
+  hosts:
+    rpc01:
+      ansible_host: 192.0.2.10  # 文档示例地址，必须替换
+      ansible_user: ubuntu
+      ansible_ssh_private_key_file: ~/.ssh/replace-solops-key
+      # 必须是两块独立整盘，用 `lsblk` 查询
+      ledger_disk: /dev/disk/by-id/replace-ledger-disk
+      accounts_disk: /dev/disk/by-id/replace-accounts-disk
+      # 仅允许格式化没有任何签名的空盘；已有 ext4 保留，其他情况报错。
+      allow_format: false
+  vars:
+    agave_version: "4.3.0"
+    agave_build_jobs: 8
+    agave_build_timeout: 14400
+    # 直接使用该 tag 自带的 Rust toolchain 和官方安装脚本。
+    agave_build_args:
+      - --no-build-dcou-bins
+      - --no-build-dev-bins
+      - --no-build-deprecated-bins
+      - --no-build-platform-tools
+      - --no-spl-token
+
+    solana_user: solana
+    cpu_governor: performance
+    solana_sysctl:
+      net.core.rmem_max: 134217728
+      net.core.wmem_max: 134217728
+      net.core.rmem_default: 134217728
+      net.core.wmem_default: 134217728
+      net.core.netdev_max_backlog: 50000
+      vm.max_map_count: 2000000
+      vm.swappiness: 1
+      fs.nr_open: 1000000
+
+    rpc_bind_address: 127.0.0.1
+    # 主网 RPC 初始化配置一致；WebSocket 自动使用下一端口 7212
+    # 8899/8900 留给 Caddy 对外接入
+    rpc_port: 7211
+    gossip_port: 8001
+    dynamic_port_range: 8000-8030
+    rpc_threads: 8
+    unified_scheduler_handler_threads: 8
+    rpc_transaction_history: true
+    # 4.3 limit-blockstore-size 按 data + coding shreds 总数计，不是字节数。
+    blockstore_limit_shreds: 100000000
+    accounts_db_write_cache_limit_bytes: 8589934592
+    accounts_index_limit: minimal
+    account_indexes: [program-id]
+    account_index_include_keys:
+      - AddressLookupTab1e1111111111111111111111111
+      # - TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
+    # 每个参数及参数值独占一个元素；不要在这里重复上面的专用参数。
+    validator_extra_args: []
+
+    expected_genesis_hash: 5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d
+    entrypoints:
+      - entrypoint.mainnet-beta.solana.com:8001
+      - entrypoint2.mainnet-beta.solana.com:8001
+      - entrypoint3.mainnet-beta.solana.com:8001
+      - entrypoint4.mainnet-beta.solana.com:8001
+      - entrypoint5.mainnet-beta.solana.com:8001
+    known_validators:
+      - Certusm1sa411sMpV9FPqU5dXAYhmmhygvxJ23S6hJ24
+      - 7Np41oeYqPefeNQEHSv1UDhYrehxin3NStELsSKCT4K2
+      - GdnSyH3YtwcxFvQrVVJMm1JhTS4QVX7MFsX56uJLUfiZ
+      - CakcnaRDHka2gXyfbEd2d3xsvkJkqsLw2akB3zsN1D2S
+
+    # 只在没有 rocksdb 且服务未运行时预下载；正常重跑不会触发停机/下载。
+    snapshot_download: true
+    # 1dad-io/solana-snapshot-finder：固定已验证的提交，按需更新。
+    snapshot_finder_version: b3a3202ace8f92bad0dc077d961cb1aca3b3c67f
+    snapshot_rpc_url: https://api.mainnet-beta.solana.com
+    snapshot_min_download_speed_mb: 50  # Finder 单位 MB/s，1 MB = 1000000 字节。
+    snapshot_max_local_age: 2500       # 本地 full 的复用阈值，单位 slots。
+    snapshot_threads: 128              # 并发探测 RPC 数，不是单文件下载连接数。
+    snapshot_search_timeout: 600       # Finder 搜索预算，秒。
+    snapshot_timeout: 10800            # Ansible 整个安装后下载任务的上限，秒。
+    agave_snapshot_min_speed: 10485760  # Agave 原生下载阈值，单位字节/秒。
+    # 启动完成后最多等 30 分钟 getHealth=ok；超时保留服务，便于排查。
+    rpc_health_retries: 180
+
+    # IP 直连不需要域名；填写真实域名并配置 DNS 后启用对应 HTTPS 入口。
+    gateway_domain: ""
+    grafana_domain: ""
+    gateway_rpc_port: 8899
+    gateway_ws_port: 8900
+
+    # API key 必填；真实值只写本地 inventory 或 Ansible Vault
+    gateway_api_key: ""
+
+    # 可选的附加 IP 限制；空列表表示只校验 API key。
+    gateway_allowed_cidrs: []
+    caddy_admin_port: 2019
+    gateway_health_interval: 10s
+    gateway_health_timeout: 3s
+
+    # 官方预编译发布包；版本与 SHA-256 必须一起更新。
+    node_exporter_version: "1.12.1"
+    node_exporter_sha256: b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63
+    node_exporter_port: 9100
+    # Solana Exporter 默认值在 vars/solana_exporter.yml；此处可按主机组覆盖。
+    solana_exporter_port: 9200
+    solana_exporter_slot_pace: 15  # 秒；非投票 RPC 使用 light-mode。
+    solana_exporter_http_timeout: 2  # 单次 RPC 超时，轻量采集有 3 个串行请求。
+    # 所有对比端点必须属于主网，使用相同 commitment；名称 local 保留给本机。
+    solana_slot_commitment: finalized
+    solana_slot_timeout: 3
+    solana_slot_reference_rpcs:
+      - name: solana-tracker
+        url: https://rpc.solanatracker.io/public
+      - name: publicnode
+        url: https://solana-rpc.publicnode.com
+      # 添加 Helius、QuickNode 等专有端点时，仅写本地 inventory，不能提交 API key。
+      # - name: helius
+      #   url: https://mainnet.helius-rpc.com/?api-key=填写自己的密钥
+    prometheus_version: "3.13.4"  # LTS
+    prometheus_sha256: 87f21a66f96c597a189cef8d640e8921b621fc17a9feff707c332c4f3b3ddd56
+    prometheus_port: 3090
+    prometheus_retention_time: 365d
+    prometheus_retention_size: 50GB
+    monitoring_scrape_interval: 15s
+    grafana_port: 3000

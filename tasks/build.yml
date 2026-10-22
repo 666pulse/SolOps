@@ -1,0 +1,59 @@
+---
+- name: 创建 Agave 源码、版本和辅助工具目录
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ solana_user }}"
+    group: "{{ solana_user }}"
+    mode: '0755'
+  loop:
+    - "{{ agave_root }}/src"
+    - "{{ agave_root }}/releases"
+    - "{{ solana_tools }}"
+- name: 下载 Rust 安装器
+  ansible.builtin.get_url:
+    url: https://sh.rustup.rs
+    dest: "{{ solana_tools }}/rustup-init.sh"
+    owner: "{{ solana_user }}"
+    group: "{{ solana_user }}"
+    mode: '0700'
+- name: 安装 rustup（toolchain 使用 Agave 仓库指定版本）
+  become_user: "{{ solana_user }}"
+  ansible.builtin.command:
+    argv: [sh, "{{ solana_tools }}/rustup-init.sh", -y, --profile, minimal, --default-toolchain, none]
+    creates: "{{ solana_home }}/.cargo/bin/rustup"
+- name: 获取固定 tag 源码
+  become_user: "{{ solana_user }}"
+  ansible.builtin.git:
+    repo: https://github.com/anza-xyz/agave.git
+    dest: "{{ agave_source }}"
+    version: "v{{ agave_version }}"
+    depth: 1
+    recursive: true
+    update: false
+- name: 编译并安装（成功后才记录完成标记）
+  become_user: "{{ solana_user }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ./scripts/cargo-install-all.sh {{ agave_build_args | map('quote') | join(' ') }} {{ agave_release | quote }}
+    {{ (agave_release + '/bin/agave-validator') | quote }} --version
+    {{ (agave_release + '/bin/solana-keygen') | quote }} --version
+    touch {{ (agave_release + '/.built') | quote }}
+  args:
+    executable: /bin/bash
+    chdir: "{{ agave_source }}"
+    creates: "{{ agave_release }}/.built"
+  environment:
+    PATH: "{{ solana_home }}/.cargo/bin:{{ ansible_facts.env.PATH }}"
+    CARGO_BUILD_JOBS: "{{ agave_build_jobs | string }}"
+  async: "{{ agave_build_timeout }}"
+  poll: 30
+  register: agave_build_result
+  when: not ansible_check_mode
+- name: 验证已安装版本
+  become_user: "{{ solana_user }}"
+  ansible.builtin.command: "{{ agave_release }}/bin/agave-validator --version"
+  register: installed_version
+  changed_when: false
+  failed_when: installed_version.rc != 0 or agave_version not in installed_version.stdout
+  when: not ansible_check_mode

@@ -1,0 +1,114 @@
+---
+- name: 安装 Grafana 软件源依赖
+  ansible.builtin.apt:
+    name: [ca-certificates, openssl]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+- name: 创建 APT keyring 目录
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+- name: 安装 Grafana 官方签名公钥
+  ansible.builtin.get_url:
+    url: https://apt.grafana.com/gpg-full.key
+    dest: /etc/apt/keyrings/grafana.asc
+    mode: '0644'
+- name: 配置 Grafana 官方稳定软件源
+  ansible.builtin.apt_repository:
+    repo: deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main
+    filename: grafana
+    state: present
+- name: 安装 Grafana OSS
+  ansible.builtin.apt:
+    name: grafana
+    state: present
+    policy_rc_d: 101
+- name: 首次生成 Grafana 管理员随机密码
+  ansible.builtin.shell: |
+    set -eu
+    umask 077
+    openssl rand -base64 32 > /etc/grafana/admin_password
+  args:
+    creates: /etc/grafana/admin_password
+  no_log: true
+- name: 设置管理员密码文件权限
+  ansible.builtin.file:
+    path: /etc/grafana/admin_password
+    owner: root
+    group: grafana
+    mode: '0640'
+- name: 创建 Grafana provisioning 目录
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: grafana
+    mode: '0750'
+  loop:
+    - /etc/grafana/provisioning/datasources
+    - /etc/grafana/provisioning/dashboards
+    - /etc/grafana/dashboards
+- name: 安装 Grafana 配置
+  ansible.builtin.template:
+    src: templates/grafana.ini.j2
+    dest: /etc/grafana/grafana.ini
+    owner: root
+    group: grafana
+    mode: '0640'
+  register: grafana_config
+- name: 配置 Prometheus 数据源
+  ansible.builtin.template:
+    src: templates/grafana-datasource.yml.j2
+    dest: /etc/grafana/provisioning/datasources/prometheus.yml
+    owner: root
+    group: grafana
+    mode: '0640'
+  register: grafana_datasource
+# 保留空 provider 以解除旧仪表盘的托管；直接删除 provider 会触发孤立仪表盘清理。
+- name: 配置旧仪表盘的保留策略
+  ansible.builtin.copy:
+    dest: /etc/grafana/provisioning/dashboards/solana.yml
+    owner: root
+    group: grafana
+    mode: '0640'
+    content: |
+      apiVersion: 1
+      providers:
+        - name: solana
+          orgId: 1
+          folder: Solana Node Service
+          type: file
+          disableDeletion: true
+          updateIntervalSeconds: 30
+          options:
+            path: /etc/grafana/dashboards
+  register: grafana_provider
+# disableDeletion: true 使缺失源文件的仪表盘转为普通仪表盘，允许界面编辑和删除。
+- name: 解除主机仪表盘的文件托管
+  ansible.builtin.file:
+    path: /etc/grafana/dashboards/node.json
+    state: absent
+  register: grafana_dashboard_source
+- name: 启动 Grafana
+  ansible.builtin.systemd_service:
+    name: grafana-server
+    enabled: true
+    state: "{{ 'restarted' if grafana_config is changed or grafana_datasource is changed or grafana_provider is changed or grafana_dashboard_source is changed else 'started' }}"
+- name: 等待 Grafana 数据库就绪
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ grafana_port }}/api/health"
+    return_content: true
+  register: grafana_ready
+  until: grafana_ready.status | default(0) == 200 and grafana_ready.json.database | default('') == 'ok'
+  retries: 30
+  delay: 2
+  when: not ansible_check_mode
+- name: 首次导入可在界面管理的主机仪表盘
+  ansible.builtin.import_tasks: grafana_dashboard.yml
+- name: 首次导入 Solana RPC slot 对比仪表盘
+  ansible.builtin.import_tasks: grafana_dashboard.yml
+  vars:
+    grafana_dashboard_file: files/solana-dashboard.json
+    grafana_dashboard_marker: .solana-dashboard-imported

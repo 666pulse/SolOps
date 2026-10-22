@@ -1,0 +1,91 @@
+---
+- name: 确认 snapshot 所在数据盘已挂载
+  ansible.builtin.command:
+    argv: [findmnt, --noheadings, --mountpoint, "{{ ledger_path }}"]
+  changed_when: false
+  check_mode: false
+- name: 创建 snapshot 目录
+  ansible.builtin.file:
+    path: "{{ snapshot_path }}"
+    state: directory
+    owner: "{{ solana_user }}"
+    group: "{{ solana_user }}"
+    mode: '0755'
+- name: 检查现有账本
+  ansible.builtin.stat:
+    path: "{{ ledger_path }}/rocksdb"
+  register: existing_ledger
+- name: 获取服务状态
+  ansible.builtin.service_facts:
+- name: 仅在首次启动前安装并运行 snapshot finder
+  when:
+    - snapshot_download | bool
+    - not existing_ledger.stat.exists
+    - ansible_facts.services.get('solana-rpc.service', {}).get('state', 'stopped') != 'running'
+  block:
+    - name: 安装 Python 虚拟环境依赖
+      ansible.builtin.apt:
+        name: [python3-venv, git]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - name: 创建 snapshot finder 目录
+      ansible.builtin.file:
+        path: "{{ snapshot_finder_dir }}"
+        state: directory
+        owner: "{{ solana_user }}"
+        group: "{{ solana_user }}"
+        mode: '0755'
+    - name: 获取指定版本的 1dad snapshot finder
+      become_user: "{{ solana_user }}"
+      ansible.builtin.git:
+        repo: https://github.com/1dad-io/solana-snapshot-finder.git
+        dest: "{{ snapshot_finder_dir }}"
+        version: "{{ snapshot_finder_version }}"
+        update: true
+    - name: 在独立虚拟环境中安装上游依赖
+      become_user: "{{ solana_user }}"
+      ansible.builtin.pip:
+        requirements: "{{ snapshot_finder_dir }}/requirements.txt"
+        virtualenv: "{{ snapshot_finder_dir }}/venv"
+        virtualenv_command: python3 -m venv
+    - name: 通过 snapshot finder 发现并下载快照
+      become_user: "{{ solana_user }}"
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - -c
+          - 'exec "$@" > "$SNAPSHOT_PROGRESS_LOG" 2>&1'
+          - snapshot-download
+          - "{{ snapshot_finder_dir }}/venv/bin/python"
+          - "{{ snapshot_finder_dir }}/snapshot-finder.py"
+          - --snapshots
+          - "{{ snapshot_path }}"
+          - --url
+          - "{{ snapshot_rpc_url }}"
+          - --min-download-speed
+          - "{{ snapshot_min_download_speed_mb | string }}"
+          - --maximum-local-snapshot-age
+          - "{{ snapshot_max_local_age | string }}"
+          - --threads-count
+          - "{{ snapshot_threads | string }}"
+          - --newer-snapshot-timeout
+          - "{{ snapshot_search_timeout | string }}"
+        chdir: "{{ snapshot_finder_dir }}"
+      environment:
+        PYTHONUNBUFFERED: '1'
+        SNAPSHOT_PROGRESS_LOG: "{{ snapshot_path }}/snapshot-progress.log"
+      async: "{{ snapshot_timeout }}"
+      poll: 0
+      register: snapshot_job
+      changed_when: true
+      when: not ansible_check_mode
+    - name: 等待快照下载并回显进度
+      become_user: "{{ solana_user }}"
+      snapshot_progress:
+        jid: "{{ snapshot_job.ansible_job_id }}"
+        async_dir: "{{ snapshot_job.results_file | dirname }}"
+        log_path: "{{ snapshot_path }}/snapshot-progress.log"
+        timeout: "{{ snapshot_timeout }}"
+        interval: 15
+      when: not ansible_check_mode

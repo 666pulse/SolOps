@@ -1,0 +1,66 @@
+rule_files:
+  - ../files/prometheus-alerts.yml
+evaluation_interval: 15s
+tests:
+  - name: 同一 commitment 下多个参考 RPC 的正负差值，过期后隐藏
+    interval: 15s
+    input_series:
+      - series: 'up{job="node",instance="localhost:9100"}'
+        values: '1+0x8'
+      - series: 'solana_rpc_comparison_timestamp_seconds{job="node",instance="localhost:9100"}'
+        values: '0+0x8'
+      - series: 'solana_rpc_slot{job="node",instance="localhost:9100",rpc="local",commitment="finalized"}'
+        values: '100+0x8'
+      - series: 'solana_rpc_slot{job="node",instance="localhost:9100",rpc="ahead",commitment="finalized"}'
+        values: '108+0x8'
+      - series: 'solana_rpc_slot{job="node",instance="localhost:9100",rpc="behind",commitment="finalized"}'
+        values: '95+0x8'
+      - series: 'solana_rpc_slot{job="node",instance="localhost:9100",rpc="wrong-commitment",commitment="confirmed"}'
+        values: '200+0x8'
+    promql_expr_test:
+      - expr: solana_rpc_slot_delta
+        eval_time: 15s
+        exp_samples:
+          - labels: 'solana_rpc_slot_delta{job="node",instance="localhost:9100",rpc="ahead",commitment="finalized"}'
+            value: 8
+          - labels: 'solana_rpc_slot_delta{job="node",instance="localhost:9100",rpc="behind",commitment="finalized"}'
+            value: -5
+      - expr: solana_rpc_slot_current
+        eval_time: 1m
+        exp_samples: []
+      - expr: solana_rpc_slot_delta
+        eval_time: 1m
+        exp_samples: []
+  - name: 本地查询失败时，不把本地当作 slot 0
+    interval: 15s
+    input_series:
+      - series: 'up{job="node",instance="localhost:9100"}'
+        values: '1+0x4'
+      - series: 'solana_rpc_comparison_timestamp_seconds{job="node",instance="localhost:9100"}'
+        values: '0+15x4'
+      - series: 'solana_rpc_slot{job="node",instance="localhost:9100",rpc="reference",commitment="finalized"}'
+        values: '108+0x4'
+      - series: 'solana_rpc_probe_success{job="node",instance="localhost:9100",rpc="local",commitment="finalized"}'
+        values: '0+0x4'
+    promql_expr_test:
+      - expr: solana_rpc_slot_delta
+        eval_time: 30s
+        exp_samples: []
+      - expr: solana_rpc_probe_current
+        eval_time: 30s
+        exp_samples:
+          - labels: 'solana_rpc_probe_current{job="node",instance="localhost:9100",rpc="local",commitment="finalized"}'
+            value: 0
+  - name: Node Exporter 失联后隐藏旧 slot
+    interval: 15s
+    input_series:
+      - series: 'up{job="node",instance="localhost:9100"}'
+        values: '0+0x4'
+      - series: 'solana_rpc_comparison_timestamp_seconds{job="node",instance="localhost:9100"}'
+        values: '0+15x4'
+      - series: 'solana_rpc_slot{job="node",instance="localhost:9100",rpc="local",commitment="finalized"}'
+        values: '100+0x4'
+    promql_expr_test:
+      - expr: solana_rpc_slot_current
+        eval_time: 15s
+        exp_samples: []

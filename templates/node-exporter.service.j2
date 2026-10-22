@@ -1,0 +1,15 @@
+[Unit]
+Description=Prometheus Node Exporter
+After=network.target
+
+[Service]
+User=node_exporter
+Group=node_exporter
+ExecStart=/opt/node_exporter/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter --web.listen-address=127.0.0.1:{{ node_exporter_port }} --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+# 不隔离挂载命名空间，确保 filesystem 指标反映主机实际挂载及读写状态。
+
+[Install]
+WantedBy=multi-user.target

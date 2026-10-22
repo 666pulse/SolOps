@@ -1,0 +1,75 @@
+---
+- name: 检查 slot 对比配置
+  ansible.builtin.assert:
+    that:
+      - solana_slot_commitment in ['processed', 'confirmed', 'finalized']
+      - solana_slot_timeout | int > 0 and solana_slot_timeout | int <= 10
+      - solana_slot_reference_rpcs is sequence and solana_slot_reference_rpcs is not string
+      - solana_slot_reference_rpcs is not mapping
+      - solana_slot_reference_rpcs | length >= 1 and solana_slot_reference_rpcs | length <= 7
+      - solana_slot_reference_rpcs | map(attribute='name') | unique | length == solana_slot_reference_rpcs | length
+    fail_msg: slot 对比需要 1–7 个不同名称的主网 RPC、有效 commitment 和 1–10 秒超时。
+  no_log: true
+- name: 检查外部 RPC 名称及地址
+  ansible.builtin.assert:
+    that:
+      - item.name is match('^[a-z][a-z0-9_-]{0,63}$')
+      - item.name != 'local'
+      - item.url is match('^https?://[^\s]+$')
+      - item.headers | default({}) is mapping
+  loop: "{{ solana_slot_reference_rpcs }}"
+  no_log: true
+- name: 安装 slot 对比运行依赖
+  ansible.builtin.apt:
+    name: [python3, ca-certificates]
+    state: present
+- name: 创建 slot 对比系统用户
+  ansible.builtin.user:
+    name: solana_slot_compare
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+- name: 创建 slot 对比程序目录
+  ansible.builtin.file:
+    path: /opt/solana-slot-compare
+    state: directory
+    mode: '0755'
+- name: 创建 Node Exporter textfile 目录
+  ansible.builtin.file:
+    path: /var/lib/node_exporter/textfile_collector
+    state: directory
+    owner: solana_slot_compare
+    group: solana_slot_compare
+    mode: '0755'
+- name: 安装 slot 对比采集器
+  ansible.builtin.copy:
+    src: files/solana_slot_compare.py
+    dest: /opt/solana-slot-compare/solana_slot_compare.py
+    mode: '0644'
+- name: 安装 slot 对比配置
+  ansible.builtin.template:
+    src: templates/solana-slot-compare.json.j2
+    dest: /etc/solana-slot-compare.json
+    owner: root
+    group: solana_slot_compare
+    mode: '0640'
+  no_log: true
+  diff: false
+- name: 安装 slot 对比服务和定时器
+  ansible.builtin.template:
+    src: "templates/solana-slot-compare.{{ item }}.j2"
+    dest: "/etc/systemd/system/solana-slot-compare.{{ item }}"
+    mode: '0644'
+  loop: [service, timer]
+  register: solana_slot_units
+- name: 启用 slot 对比定时器
+  ansible.builtin.systemd_service:
+    name: solana-slot-compare.timer
+    enabled: true
+    daemon_reload: true
+    state: "{{ 'restarted' if solana_slot_units is changed else 'started' }}"
+- name: 执行一次 slot 采集以验证配置及文件写入
+  ansible.builtin.systemd_service:
+    name: solana-slot-compare.service
+    state: started
+  when: not ansible_check_mode

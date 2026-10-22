@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect Solana RPC slots every 15 seconds
+
+[Timer]
+OnBootSec=15s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+Unit=solana-slot-compare.service
+
+[Install]
+WantedBy=timers.target

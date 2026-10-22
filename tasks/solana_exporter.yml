@@ -1,0 +1,119 @@
+---
+- name: 检查 Solana Exporter 配置
+  ansible.builtin.assert:
+    that:
+      - solana_exporter_revision is match('^[0-9a-f]{40}$')
+      - solana_exporter_source_sha256 is match('^[0-9a-f]{64}$')
+      - solana_exporter_go_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+      - solana_exporter_go_sha256 is match('^[0-9a-f]{64}$')
+      - solana_exporter_slot_pace | int > 0
+      - solana_exporter_http_timeout | int > 0
+      - solana_exporter_build_jobs | int > 0
+      - solana_exporter_build_timeout | int > 0
+    fail_msg: Solana Exporter 需要固定源码提交、Go 版本及对应 SHA-256，周期和资源参数必须为正数。
+- name: 创建 Solana Exporter 系统用户
+  ansible.builtin.user:
+    name: solana_exporter
+    system: true
+    create_home: true
+    home: /var/lib/solana-exporter
+    shell: /usr/sbin/nologin
+- name: 创建 Solana Exporter 安装目录
+  ansible.builtin.file:
+    path: "{{ solana_exporter_release }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+- name: 检查 Solana Exporter 已安装版本
+  ansible.builtin.stat:
+    path: "{{ solana_exporter_release }}/solana-exporter"
+  register: solana_exporter_installed
+- name: 构建缺失的 Solana Exporter
+  when: not solana_exporter_installed.stat.exists
+  block:
+    - name: 安装 Solana Exporter 构建依赖
+      ansible.builtin.apt:
+        name: [ca-certificates, tar, acl]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - name: 创建源码和工具链目录
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /var/cache/solana
+        - "/opt/solana-exporter/go-{{ solana_exporter_go_version }}"
+        - "/opt/solana-exporter/src/{{ solana_exporter_revision }}"
+    - name: 下载并校验 Go 工具链
+      ansible.builtin.get_url:
+        url: "https://go.dev/dl/go{{ solana_exporter_go_version }}.linux-amd64.tar.gz"
+        dest: "/var/cache/solana/go{{ solana_exporter_go_version }}.linux-amd64.tar.gz"
+        checksum: "sha256:{{ solana_exporter_go_sha256 }}"
+        mode: '0644'
+    - name: 解压独立 Go 工具链
+      ansible.builtin.unarchive:
+        src: "/var/cache/solana/go{{ solana_exporter_go_version }}.linux-amd64.tar.gz"
+        dest: "/opt/solana-exporter/go-{{ solana_exporter_go_version }}"
+        remote_src: true
+        creates: "/opt/solana-exporter/go-{{ solana_exporter_go_version }}/go/bin/go"
+    - name: 下载并校验 Solana Exporter 源码
+      ansible.builtin.get_url:
+        url: "https://codeload.github.com/asymmetric-research/solana-exporter/tar.gz/{{ solana_exporter_revision }}"
+        dest: "/var/cache/solana/solana-exporter-{{ solana_exporter_revision }}.tar.gz"
+        checksum: "sha256:{{ solana_exporter_source_sha256 }}"
+        mode: '0644'
+    - name: 解压 Solana Exporter 源码
+      ansible.builtin.unarchive:
+        src: "/var/cache/solana/solana-exporter-{{ solana_exporter_revision }}.tar.gz"
+        dest: "/opt/solana-exporter/src/{{ solana_exporter_revision }}"
+        remote_src: true
+        extra_opts: [--strip-components=1]
+    - name: 编译并验证 Solana Exporter 二进制程序
+      become_user: solana_exporter
+      ansible.builtin.shell: |
+        set -eu
+        {{ ('/opt/solana-exporter/go-' + solana_exporter_go_version + '/go/bin/go') | quote }} build -mod=readonly -trimpath -p {{ solana_exporter_build_jobs | int }} -o /var/lib/solana-exporter/solana-exporter.tmp ./cmd/solana-exporter
+        /var/lib/solana-exporter/solana-exporter.tmp -help
+      args:
+        chdir: "/opt/solana-exporter/src/{{ solana_exporter_revision }}"
+      environment:
+        CGO_ENABLED: '0'
+        GOTOOLCHAIN: local
+        GOMAXPROCS: "{{ solana_exporter_build_jobs | string }}"
+        GOPATH: /var/lib/solana-exporter/go
+        GOCACHE: /var/lib/solana-exporter/go-cache
+      async: "{{ solana_exporter_build_timeout }}"
+      poll: 10
+      when: not ansible_check_mode
+    - name: 安装已验证的 Solana Exporter 二进制程序
+      ansible.builtin.copy:
+        src: /var/lib/solana-exporter/solana-exporter.tmp
+        dest: "{{ solana_exporter_release }}/solana-exporter"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      register: solana_exporter_binary
+      when: not ansible_check_mode
+- name: 安装 Solana Exporter 服务
+  ansible.builtin.template:
+    src: templates/solana-exporter.service.j2
+    dest: /etc/systemd/system/solana-exporter.service
+    mode: '0644'
+  register: solana_exporter_unit
+- name: 启动 Solana Exporter
+  ansible.builtin.systemd_service:
+    name: solana-exporter
+    enabled: true
+    daemon_reload: true
+    state: "{{ 'restarted' if solana_exporter_unit is changed or solana_exporter_binary is changed else 'started' }}"
+# monitoring 可先于 service 执行，此时 /metrics 会因 RPC 不可用返回 500。
+- name: 等待 Solana Exporter 监听端口
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ solana_exporter_port }}"
+    timeout: 30
+  when: not ansible_check_mode

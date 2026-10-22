@@ -1,0 +1,82 @@
+{
+    admin 127.0.0.1:{{ caddy_admin_port }}
+    metrics {
+        per_host
+    }
+    log {
+        format filter {
+            wrap json
+            fields {
+                request>uri query {
+                    delete api-key
+                }
+            }
+        }
+    }
+}
+
+(rpc_backend) {
+    health_uri /
+    health_port {{ rpc_port }}
+    health_method POST
+    health_request_body `{"jsonrpc":"2.0","id":1,"method":"getHealth"}`
+    health_headers {
+        Content-Type application/json
+    }
+    health_status 200
+    health_body `"result"\s*:\s*"ok"`
+    health_interval {{ gateway_health_interval }}
+    health_timeout {{ gateway_health_timeout }}
+}
+
+(rpc_gateway) {
+    @unauthorized not query api-key={{ gateway_api_key }}
+{% if gateway_allowed_cidrs %}
+    @denied not remote_ip {{ gateway_allowed_cidrs | join(' ') }}
+{% endif %}
+    @websocket header Upgrade websocket
+    route {
+{% if gateway_allowed_cidrs %}
+        respond @denied "Forbidden" 403
+{% endif %}
+        respond @unauthorized "Unauthorized" 401
+        uri query -api-key
+        handle @websocket {
+            reverse_proxy 127.0.0.1:{{ rpc_port | int + 1 }} {
+                import rpc_backend
+            }
+        }
+        handle {
+            reverse_proxy 127.0.0.1:{{ rpc_port }} {
+                import rpc_backend
+            }
+        }
+    }
+}
+
+{% if gateway_domain %}{{ gateway_domain }}, {% endif %}http://:{{ gateway_rpc_port }} {
+    import rpc_gateway
+}
+
+http://:{{ gateway_ws_port }} {
+    @unauthorized not query api-key={{ gateway_api_key }}
+{% if gateway_allowed_cidrs %}
+    @denied not remote_ip {{ gateway_allowed_cidrs | join(' ') }}
+{% endif %}
+    route {
+{% if gateway_allowed_cidrs %}
+        respond @denied "Forbidden" 403
+{% endif %}
+        respond @unauthorized "Unauthorized" 401
+        uri query -api-key
+        reverse_proxy 127.0.0.1:{{ rpc_port | int + 1 }} {
+            import rpc_backend
+        }
+    }
+}
+
+{% if grafana_domain %}
+{{ grafana_domain }} {
+    reverse_proxy 127.0.0.1:{{ grafana_port }}
+}
+{% endif %}

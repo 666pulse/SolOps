@@ -1,0 +1,76 @@
+groups:
+  - name: rpc-host
+    rules:
+      - alert: ScrapeTargetDown
+        expr: up{job=~"node|caddy|solana"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} 指标端点不可用"
+      - alert: HostHighCpu
+        expr: 100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: CPU 使用率持续超过 90%
+      - alert: GatewayBackendUnhealthy
+        expr: caddy_reverse_proxy_upstreams_healthy == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "网关后端 {{ $labels.upstream }} 健康检查失败"
+      - alert: HostLowMemory
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 可用内存持续低于 10%
+      - alert: HostLowDiskSpace
+        expr: (node_filesystem_avail_bytes{mountpoint=~"/|/mnt/ledger|/mnt/accounts",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes < 0.1) and on (instance, device, mountpoint) (node_filesystem_readonly == 0)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.mountpoint }} 剩余磁盘空间低于 10%"
+  - name: solana-rpc
+    rules:
+      - alert: SolanaNodeUnhealthy
+        expr: solana_node_is_healthy{job="solana"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Solana RPC 节点不健康
+      - alert: SolanaNodeBehind
+        expr: solana_node_num_slots_behind{job="solana"} > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Solana RPC 落后 {{ $value }} slots"
+      - alert: SolanaSlotNotAdvancing
+        expr: changes(solana_node_slot_height{job="solana"}[5m]) == 0 and on (job, instance) up{job="solana"} == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Solana RPC finalized slot 持续没有前进
+  - name: solana-slot-comparison
+    rules:
+      - record: solana_rpc_slot_current
+        expr: solana_rpc_slot{job="node"} and on (job, instance) (time() - solana_rpc_comparison_timestamp_seconds{job="node"} < 60) and on (job, instance) (up{job="node"} == 1)
+      - record: solana_rpc_slot_delta
+        expr: solana_rpc_slot_current{rpc!="local"} - on (job, instance, commitment) group_left solana_rpc_slot_current{rpc="local"}
+      - record: solana_rpc_probe_current
+        expr: solana_rpc_probe_success{job="node"} and on (job, instance) (time() - solana_rpc_comparison_timestamp_seconds{job="node"} < 60) and on (job, instance) (up{job="node"} == 1)
+      - alert: SolanaSlotComparisonStale
+        expr: up{job="node"} == 1 unless on (job, instance) (time() - solana_rpc_comparison_timestamp_seconds{job="node"} < 60)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Solana slot 对比采集已停止或数据过期

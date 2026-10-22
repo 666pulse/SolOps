@@ -1,0 +1,5 @@
+---
+# 官方 GitHub Release；更新时必须同时更新版本及 linux_amd64.deb 的 SHA-256。
+caddy_release:
+  version: 2.11.7
+  sha256: a22b914ffd1958da42bc7ab13b7b62c6100634e0798ab594891d2d61d53ba749

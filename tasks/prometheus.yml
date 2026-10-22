@@ -1,0 +1,73 @@
+---
+- name: 创建 Prometheus 系统用户
+  ansible.builtin.user:
+    name: prometheus
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+- name: 创建 Prometheus 安装和配置目录
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /var/cache/solana
+    - /opt/prometheus
+    - /etc/prometheus
+- name: 创建 Prometheus 数据目录
+  ansible.builtin.file:
+    path: /var/lib/prometheus
+    state: directory
+    owner: prometheus
+    group: prometheus
+    mode: '0750'
+- name: 下载并校验 Prometheus 官方 LTS 发布包
+  ansible.builtin.get_url:
+    url: "https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz"
+    dest: "/var/cache/solana/prometheus-{{ prometheus_version }}.tar.gz"
+    checksum: "sha256:{{ prometheus_sha256 }}"
+    mode: '0644'
+- name: 解压 Prometheus
+  ansible.builtin.unarchive:
+    src: "/var/cache/solana/prometheus-{{ prometheus_version }}.tar.gz"
+    dest: /opt/prometheus
+    remote_src: true
+    creates: "/opt/prometheus/prometheus-{{ prometheus_version }}.linux-amd64/prometheus"
+- name: 校验并安装 Prometheus 告警规则
+  ansible.builtin.copy:
+    src: files/prometheus-alerts.yml
+    dest: /etc/prometheus/alerts.yml
+    owner: root
+    group: prometheus
+    mode: '0640'
+    validate: "/opt/prometheus/prometheus-{{ prometheus_version }}.linux-amd64/promtool check rules %s"
+  register: prometheus_rules
+- name: 校验并安装 Prometheus 配置
+  ansible.builtin.template:
+    src: templates/prometheus.yml.j2
+    dest: /etc/prometheus/prometheus.yml
+    owner: root
+    group: prometheus
+    mode: '0640'
+    validate: "/opt/prometheus/prometheus-{{ prometheus_version }}.linux-amd64/promtool check config %s"
+  register: prometheus_config
+- name: 安装 Prometheus 服务
+  ansible.builtin.template:
+    src: templates/prometheus.service.j2
+    dest: /etc/systemd/system/prometheus.service
+    mode: '0644'
+  register: prometheus_unit
+- name: 启动 Prometheus
+  ansible.builtin.systemd_service:
+    name: prometheus
+    enabled: true
+    daemon_reload: true
+    state: "{{ 'restarted' if prometheus_unit is changed or prometheus_config is changed or prometheus_rules is changed else 'started' }}"
+- name: 等待 Prometheus 就绪
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ prometheus_port }}/-/ready"
+  register: prometheus_ready
+  until: prometheus_ready.status | default(0) == 200
+  retries: 15
+  delay: 2
+  when: not ansible_check_mode

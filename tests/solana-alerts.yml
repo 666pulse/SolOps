@@ -1,0 +1,66 @@
+rule_files:
+  - ../files/prometheus-alerts.yml
+evaluation_interval: 1m
+tests:
+  - name: exporter 采集失败
+    interval: 1m
+    input_series:
+      - series: 'up{job="solana",instance="127.0.0.1:9200"}'
+        values: '0+0x3'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ScrapeTargetDown
+        exp_alerts:
+          - exp_labels: {job: solana, instance: '127.0.0.1:9200', severity: critical}
+            exp_annotations: {summary: 'solana 指标端点不可用'}
+  - name: 节点不健康且落后
+    interval: 1m
+    input_series:
+      - series: 'solana_node_is_healthy{job="solana",instance="127.0.0.1:9200"}'
+        values: '0+0x6'
+      - series: 'solana_node_num_slots_behind{job="solana",instance="127.0.0.1:9200"}'
+        values: '123+0x6'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SolanaNodeUnhealthy
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: SolanaNodeUnhealthy
+        exp_alerts:
+          - exp_labels: {job: solana, instance: '127.0.0.1:9200', severity: critical}
+            exp_annotations: {summary: Solana RPC 节点不健康}
+      - eval_time: 5m
+        alertname: SolanaNodeBehind
+        exp_alerts:
+          - exp_labels: {job: solana, instance: '127.0.0.1:9200', severity: warning}
+            exp_annotations: {summary: 'Solana RPC 落后 123 slots'}
+  - name: 采集成功但 slot 停滞，恢复后解除
+    interval: 1m
+    input_series:
+      - series: 'up{job="solana",instance="127.0.0.1:9200"}'
+        values: '1+0x15'
+      - series: 'solana_node_slot_height{job="solana",instance="127.0.0.1:9200"}'
+        values: '100+1x5 105+0x8 106'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SolanaSlotNotAdvancing
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: SolanaSlotNotAdvancing
+        exp_alerts:
+          - exp_labels: {job: solana, instance: '127.0.0.1:9200', severity: critical}
+            exp_annotations: {summary: Solana RPC finalized slot 持续没有前进}
+      - eval_time: 15m
+        alertname: SolanaSlotNotAdvancing
+        exp_alerts: []
+  - name: 采集失败时不重复报告 slot 停滞
+    interval: 1m
+    input_series:
+      - series: 'up{job="solana",instance="127.0.0.1:9200"}'
+        values: '0+0x12'
+      - series: 'solana_node_slot_height{job="solana",instance="127.0.0.1:9200"}'
+        values: '100+0x12'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: SolanaSlotNotAdvancing
+        exp_alerts: []

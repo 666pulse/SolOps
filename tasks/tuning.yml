@@ -1,0 +1,35 @@
+---
+- name: 写入 Solana 内核参数
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-solana.conf
+    mode: '0644'
+    content: |
+      # Managed by Ansible
+      {% for key, value in solana_sysctl.items() %}
+      {{ key }} = {{ value }}
+      {% endfor %}
+  register: sysctl_config
+- name: 应用内核参数
+  ansible.builtin.command: sysctl -p /etc/sysctl.d/90-solana.conf
+  when: sysctl_config is changed
+  changed_when: true
+- name: 配置 CPU governor
+  ansible.builtin.copy:
+    dest: /etc/default/cpufrequtils
+    mode: '0644'
+    content: 'GOVERNOR="{{ cpu_governor }}"'
+  register: governor_config
+- name: 启用 CPU governor 服务
+  ansible.builtin.systemd_service:
+    name: cpufrequtils
+    enabled: true
+    state: "{{ 'restarted' if governor_config is changed else 'started' }}"
+- name: 设置用户资源限制
+  ansible.builtin.copy:
+    dest: /etc/security/limits.d/90-solana.conf
+    mode: '0644'
+    content: |
+      {{ solana_user }} soft nofile 1000000
+      {{ solana_user }} hard nofile 1000000
+      {{ solana_user }} soft memlock unlimited
+      {{ solana_user }} hard memlock unlimited

@@ -1,0 +1,62 @@
+---
+- name: 创建日志目录
+  ansible.builtin.file:
+    path: /var/log/solana
+    state: directory
+    owner: "{{ solana_user }}"
+    group: "{{ solana_user }}"
+    mode: '0750'
+- name: 渲染并检查启动脚本
+  ansible.builtin.template:
+    src: templates/start_validator.sh.j2
+    dest: "{{ solana_home }}/start_validator.sh"
+    mode: '0755'
+    validate: /bin/bash -n %s
+  register: validator_script
+- name: 使用目标版本检查启动参数
+  become_user: "{{ solana_user }}"
+  ansible.builtin.command: "{{ solana_home }}/start_validator.sh --check"
+  changed_when: false
+  when: not ansible_check_mode
+- name: 安装 systemd 服务
+  ansible.builtin.template:
+    src: templates/solana-rpc.service.j2
+    dest: /etc/systemd/system/solana-rpc.service
+    mode: '0644'
+  register: validator_unit
+- name: 配置日志轮转
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/solana-rpc
+    mode: '0644'
+    content: |
+      /var/log/solana/validator.log {
+          daily
+          maxsize 1G
+          rotate 7
+          compress
+          delaycompress
+          missingok
+          notifempty
+          su {{ solana_user }} {{ solana_user }}
+          postrotate
+              /bin/systemctl kill -s USR1 --kill-who=main solana-rpc.service || true
+          endscript
+      }
+- name: 启动 RPC（仅配置变化时重启）
+  ansible.builtin.systemd_service:
+    name: solana-rpc
+    enabled: true
+    daemon_reload: "{{ validator_unit is changed }}"
+    state: "{{ 'restarted' if validator_script is changed or validator_unit is changed or (agave_build_result is defined and agave_build_result is changed) else 'started' }}"
+- name: 等待 RPC 追平并通过健康检查
+  ansible.builtin.uri:
+    url: "http://{{ '127.0.0.1' if rpc_bind_address == '0.0.0.0' else rpc_bind_address }}:{{ rpc_port }}"
+    method: POST
+    body_format: json
+    body: {jsonrpc: '2.0', id: 1, method: getHealth}
+    return_content: true
+  register: rpc_health
+  until: rpc_health.status | default(0) == 200 and rpc_health.json.result | default('') == 'ok'
+  retries: "{{ rpc_health_retries }}"
+  delay: 10
+  when: not ansible_check_mode

@@ -1,0 +1,5 @@
+{{ {
+  'commitment': solana_slot_commitment,
+  'timeout_seconds': solana_slot_timeout | int,
+  'endpoints': [{'name': 'local', 'url': 'http://127.0.0.1:' ~ rpc_port}] + solana_slot_reference_rpcs
+} | to_nice_json }}

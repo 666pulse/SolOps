@@ -1,0 +1,89 @@
+---
+# 只初始化一次；界面删除后不重新创建，也不覆盖用户保存的修改。
+- name: 检查仪表盘初始化标记
+  ansible.builtin.stat:
+    path: "/var/lib/grafana/{{ grafana_dashboard_marker | default('.node-dashboard-imported') }}"
+  register: grafana_dashboard_initialized
+- name: 初始化缺失的 Grafana 仪表盘
+  when:
+    - not ansible_check_mode
+    - not grafana_dashboard_initialized.stat.exists
+  vars:
+    grafana_dashboard: "{{ lookup('ansible.builtin.file', grafana_dashboard_file | default('files/node-dashboard.json')) | from_json }}"
+    grafana_api: "http://127.0.0.1:{{ grafana_port }}"
+    grafana_dashboard_folder: Solana Node Service
+  block:
+    - name: 读取本机 Grafana 管理员凭据
+      ansible.builtin.slurp:
+        src: /etc/grafana/admin_password
+      register: grafana_admin_password
+      no_log: true
+    - name: 检查仪表盘是否已存在
+      ansible.builtin.uri:
+        url: "{{ grafana_api }}/api/dashboards/uid/{{ grafana_dashboard.uid }}"
+        url_username: admin
+        url_password: "{{ grafana_admin_password.content | b64decode | trim }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      register: grafana_existing_dashboard
+      no_log: true
+    - name: 导入缺失的仪表盘
+      when: grafana_existing_dashboard.status == 404
+      block:
+        - name: 查找仪表盘文件夹
+          ansible.builtin.uri:
+            url: "{{ grafana_api }}/api/search?type=dash-folder&query={{ grafana_dashboard_folder | urlencode }}"
+            url_username: admin
+            url_password: "{{ grafana_admin_password.content | b64decode | trim }}"
+            force_basic_auth: true
+          register: grafana_folder_search
+          no_log: true
+        - name: 匹配目标文件夹
+          ansible.builtin.set_fact:
+            grafana_dashboard_folders: "{{ grafana_folder_search.json | selectattr('title', 'equalto', grafana_dashboard_folder) | list }}"
+        - name: 确认目标文件夹没有重名
+          ansible.builtin.assert:
+            that: grafana_dashboard_folders | length <= 1
+            fail_msg: Grafana 存在多个同名目标文件夹，请先整理文件夹。
+        - name: 创建缺失的文件夹
+          ansible.builtin.uri:
+            url: "{{ grafana_api }}/apis/folder.grafana.app/v1/namespaces/default/folders"
+            method: POST
+            url_username: admin
+            url_password: "{{ grafana_admin_password.content | b64decode | trim }}"
+            force_basic_auth: true
+            body_format: json
+            body:
+              metadata:
+                generateName: solana-node-
+              spec:
+                title: "{{ grafana_dashboard_folder }}"
+            status_code: 201
+          register: grafana_created_folder
+          when: grafana_dashboard_folders | length == 0
+          changed_when: true
+          no_log: true
+        - name: 通过 API 导入仪表盘
+          ansible.builtin.uri:
+            url: "{{ grafana_api }}/apis/dashboard.grafana.app/v1/namespaces/default/dashboards"
+            method: POST
+            url_username: admin
+            url_password: "{{ grafana_admin_password.content | b64decode | trim }}"
+            force_basic_auth: true
+            body_format: json
+            body:
+              metadata:
+                name: "{{ grafana_dashboard.uid }}"
+                annotations:
+                  grafana.app/folder: "{{ grafana_dashboard_folders[0].uid if grafana_dashboard_folders | length > 0 else grafana_created_folder.json.metadata.name }}"
+              spec: "{{ grafana_dashboard }}"
+            status_code: 201
+          changed_when: true
+          no_log: true
+    - name: 记录仪表盘已初始化
+      ansible.builtin.copy:
+        dest: "/var/lib/grafana/{{ grafana_dashboard_marker | default('.node-dashboard-imported') }}"
+        content: "{{ grafana_dashboard.uid }}\n"
+        owner: root
+        group: root
+        mode: '0600'

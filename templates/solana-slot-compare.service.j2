@@ -1,0 +1,20 @@
+[Unit]
+Description=Compare local Solana slot with reference RPCs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=solana_slot_compare
+Group=solana_slot_compare
+ExecStart=/usr/bin/python3 /opt/solana-slot-compare/solana_slot_compare.py --config /etc/solana-slot-compare.json --output /var/lib/node_exporter/textfile_collector/solana-slot-compare.prom
+TimeoutStartSec=12
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/node_exporter/textfile_collector
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077

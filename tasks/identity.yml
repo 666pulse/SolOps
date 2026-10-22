@@ -1,0 +1,45 @@
+---
+- name: 检查旧位置的私钥
+  ansible.builtin.stat:
+    path: "{{ solana_home }}/identity/validator-keypair.json"
+    get_checksum: false
+  register: legacy_identity
+- name: 将已有私钥迁至主目录（目标已存在时保留目标）
+  ansible.builtin.command:
+    argv: [mv, -n, "{{ solana_home }}/identity/validator-keypair.json", "{{ solana_identity }}"]
+    creates: "{{ solana_identity }}"
+  register: identity_migration
+  when: legacy_identity.stat.exists
+  no_log: true
+- name: 检查迁移后的旧私钥目录
+  ansible.builtin.find:
+    paths: "{{ solana_home }}/identity"
+    file_type: any
+    hidden: true
+  register: legacy_identity_files
+  when: identity_migration is changed
+- name: 移除迁移后空的私钥目录
+  ansible.builtin.command:
+    argv: [rmdir, "{{ solana_home }}/identity"]
+  when:
+    - identity_migration is changed
+    - legacy_identity_files.matched == 0
+    - not ansible_check_mode
+- name: 仅在私钥不存在时生成（不输出助记词，不下载到控制机）
+  become_user: "{{ solana_user }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ agave_release }}/bin/solana-keygen"
+      - new
+      - --no-bip39-passphrase
+      - --silent
+      - --outfile
+      - "{{ solana_identity }}"
+    creates: "{{ solana_identity }}"
+  no_log: true
+- name: 设置私钥权限
+  ansible.builtin.file:
+    path: "{{ solana_identity }}"
+    owner: "{{ solana_user }}"
+    group: "{{ solana_user }}"
+    mode: '0600'
